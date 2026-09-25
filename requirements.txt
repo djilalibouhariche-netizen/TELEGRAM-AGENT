@@ -1,4 +1,4 @@
-anthropic>=0.40.0
+litellm>=1.55.0
 python-telegram-bot[job-queue]>=21.0
 requests>=2.31.0
 duckduckgo-search>=6.0.0
