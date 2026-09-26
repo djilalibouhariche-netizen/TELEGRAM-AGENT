@@ -96,6 +96,10 @@ BOT_APP: Application | None = None
 UPLOADS_DIR = "/tmp/bot_files/uploads"
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
+# Stores the full breakdown of the last provider failure so /debug can show
+# it directly in Telegram (no need to dig through Railway logs).
+LAST_ERROR: str | None = None
+
 
 def _openai_tools():
     """Convert the existing Anthropic-style TOOLS list to the OpenAI-style
@@ -121,19 +125,25 @@ OPENAI_TOOLS = _openai_tools()
 def _call_model_with_fallback(messages: list):
     """Try each configured provider in order; return the first successful
     litellm response. Raises the last error if every provider fails."""
-    last_error = None
+    global LAST_ERROR
+    errors = []
     for provider in PROVIDERS:
         try:
-            return litellm.completion(
+            response = litellm.completion(
                 model=provider["model"],
                 messages=messages,
                 tools=OPENAI_TOOLS,
                 max_tokens=1024,
             )
+            LAST_ERROR = None  # a provider succeeded, clear any previous failure
+            return response
         except Exception as exc:  # noqa: BLE001 - we want to fall back on *any* error
+            err_text = f"❌ {provider['name']} ({provider['model']}): {type(exc).__name__}: {exc}"
             logger.warning("Provider '%s' failed (%s) — trying next provider.", provider["name"], exc)
-            last_error = exc
-    raise last_error
+            errors.append(err_text)
+
+    LAST_ERROR = "\n\n".join(errors) if errors else "No provider configured."
+    raise RuntimeError(LAST_ERROR)
 
 
 def run_agent_loop(chat_id: int, user_text: str):
@@ -210,6 +220,17 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("تم مسح ذاكرة المحادثة. ابدأ من جديد!")
 
 
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows the full breakdown of the last provider failure, straight in
+    Telegram, so you don't need to dig through Railway/Render logs."""
+    active = ", ".join(p["name"] for p in PROVIDERS) or "(none configured)"
+    header = f"المزودون المفعّلون حاليًا: {active}\n\n"
+    if LAST_ERROR:
+        await update.message.reply_text(header + LAST_ERROR[:3800])
+    else:
+        await update.message.reply_text(header + "لا يوجد خطأ مسجل حتى الآن. أرسل رسالة عادية أولاً حتى يفشل، ثم أعد /debug.")
+
+
 async def _reply_with_attachments(update: Update, text: str, attachments: list[str]) -> None:
     await update.message.reply_text(text)
     for path in attachments:
@@ -230,7 +251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply, attachments = run_agent_loop(chat_id, user_text)
     except Exception:
         logger.exception("Agent loop failed")
-        reply, attachments = "عذرًا، حدث خطأ أثناء معالجة طلبك. حاول مرة أخرى.", []
+        reply, attachments = "عذرًا، حدث خطأ أثناء معالجة طلبك. أرسل /debug لمعرفة السبب.", []
 
     await _reply_with_attachments(update, reply, attachments)
 
@@ -255,7 +276,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply, attachments = run_agent_loop(chat_id, synthetic_message)
     except Exception:
         logger.exception("Agent loop failed on document")
-        reply, attachments = "عذرًا، حدث خطأ أثناء معالجة الملف.", []
+        reply, attachments = "عذرًا، حدث خطأ أثناء معالجة الملف. أرسل /debug لمعرفة السبب.", []
 
     await _reply_with_attachments(update, reply, attachments)
 
@@ -267,6 +288,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
