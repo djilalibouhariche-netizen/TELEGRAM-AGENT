@@ -61,23 +61,19 @@ def free_web_search(query: str, max_results: int = 5) -> str:
         return "\n---\n".join(results)
     except Exception as e:
         logging.error(f"خطأ أثناء البحث: {e}")
-        return f"حدث خطأ أثناء البحث: {str(e)}"
+        return f"تعذر إجراء البحث المباشر: {str(e)}"
 
 # --- محركات الاستجابة الذكية ---
 
 def ask_groq(prompt_text: str) -> str:
-    if not groq_client: return None
-    # نماذج Groq الشغالة والمجانية حالياً
-    groq_models = [
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile",
-        "qwen-2.5-coder-32b",
-        "llama-3.2-3b-preview"
-    ]
-    for model_name in groq_models:
+    if not GROQ_KEY or not groq_client: 
+        return None
+    # قائمة الموديلات المعتمدة الشغالة حالياً في Groq
+    models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "qwen-2.5-coder-32b"]
+    for m in models:
         try:
             res = groq_client.chat.completions.create(
-                model=model_name,
+                model=m,
                 messages=[
                     {"role": "system", "content": SYSTEM_INSTRUCTION},
                     {"role": "user", "content": prompt_text}
@@ -85,22 +81,46 @@ def ask_groq(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح Groq باستخدام النموذج: {model_name}")
-                return res.choices[0].message.content
+                logging.info(f"نجح Groq باستخدام الموديل: {m}")
+                return res.choices[0].message.content.strip()
         except Exception as e:
-            logging.warning(f"فشل Groq ({model_name}): {e}")
+            logging.warning(f"فشل Groq ({m}): {e}")
+            continue
+    return None
+
+def ask_gemini(prompt_text: str) -> str:
+    if not GEMINI_KEY or not gemini_client: 
+        return None
+    # الموديلات المعتمدة حسب التحديث الأخير لـ Google API
+    models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    for m in models:
+        try:
+            res = gemini_client.models.generate_content(
+                model=m,
+                contents=prompt_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.1
+                )
+            )
+            if res and res.text:
+                logging.info(f"نجح Gemini باستخدام الموديل: {m}")
+                return res.text.strip()
+        except Exception as e:
+            logging.warning(f"فشل Gemini ({m}): {e}")
             continue
     return None
 
 def ask_openrouter(prompt_text: str) -> str:
-    if not openrouter_client: return None
-    openrouter_models = [
+    if not OPENROUTER_KEY or not openrouter_client: 
+        return None
+    models = [
         "meta-llama/llama-3.3-70b-instruct:free",
         "qwen/qwen-2.5-72b-instruct:free",
         "google/gemini-2.0-flash-001:free",
         "openrouter/auto"
     ]
-    for m in openrouter_models:
+    for m in models:
         try:
             res = openrouter_client.chat.completions.create(
                 model=m,
@@ -111,42 +131,18 @@ def ask_openrouter(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح OpenRouter باستخدام النموذج: {m}")
-                return res.choices[0].message.content
+                logging.info(f"نجح OpenRouter باستخدام الموديل: {m}")
+                return res.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"فشل OpenRouter ({m}): {e}")
             continue
     return None
 
-def ask_gemini(prompt_text: str) -> str:
-    if not gemini_client: return None
-    gemini_models = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
-    ]
-    for model_name in gemini_models:
-        try:
-            res = gemini_client.models.generate_content(
-                model=model_name,
-                contents=prompt_text,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.1
-                )
-            )
-            if res.text:
-                logging.info(f"نجح Gemini باستخدام النموذج: {model_name}")
-                return res.text
-        except Exception as e:
-            logging.warning(f"فشل Gemini ({model_name}): {e}")
-            continue
-    return None
-
 def ask_mistral(prompt_text: str) -> str:
-    if not mistral_client: return None
-    mistral_models = ["mistral-small-latest", "open-mistral-7b"]
-    for m in mistral_models:
+    if not MISTRAL_KEY or not mistral_client: 
+        return None
+    models = ["mistral-small-latest", "open-mistral-7b"]
+    for m in models:
         try:
             res = mistral_client.chat.completions.create(
                 model=m,
@@ -157,8 +153,8 @@ def ask_mistral(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح Mistral باستخدام النموذج: {m}")
-                return res.choices[0].message.content
+                logging.info(f"نجح Mistral باستخدام الموديل: {m}")
+                return res.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"فشل Mistral ({m}): {e}")
             continue
@@ -174,11 +170,10 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
     else:
         full_prompt = query
 
-    # ترتيب المحركات حسب السرعة والوفرة المجانية
     engines = [
         ("Groq", ask_groq),
-        ("OpenRouter", ask_openrouter),
         ("Google Gemini", ask_gemini),
+        ("OpenRouter", ask_openrouter),
         ("Mistral AI", ask_mistral),
     ]
 
@@ -186,42 +181,39 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
         try:
             answer = engine_func(full_prompt)
             if answer and answer.strip():
-                logging.info(f"تم الحصول على الإجابة من: {name}")
+                logging.info(f"تمت الاستجابة عبر المحرك: {name}")
                 return answer
         except Exception as e:
-            logging.warning(f"خطأ غير متوقع في محرك {name}: {e}")
+            logging.warning(f"خطأ في محرك {name}: {e}")
             continue
 
     if search_context and search_context != "لم يتم العثور على نتائج بحث مباشرة.":
-        return f"عذراً، تعذر معالجة النص عبر محركات الذكاء الاصطناعي حالياً. إليك نتائج البحث العادي:\n\n{search_context}"
+        return f"نتائج البحث المباشر:\n\n{search_context}"
 
-    return "عذراً، تعذر الحصول على إجابة من المحركات المتاحة. يرجى التأكد من إضافة مفاتيح API الصحيحة في متغيرات البيئة."
+    return "عذراً، لم تنجح الاستجابة من المحركات المتاحة. يرجى التحقق من مفاتيح الـ API في متغيرات البيئة."
 
 async def send_response(update: Update, text: str):
-    """إرسال الإجابة مع تجزئة النصوص الطويلة وتفادي أخطاء Markdown"""
+    """تجزئة الرسائل الطويلة وحماية البوت من أخطاء تنسيق Markdown"""
     max_length = 4000
-    if len(text) <= max_length:
+    if not text:
+        text = "لم يتم الحصول على إجابة."
+        
+    chunks = [text[i:i + max_length] for i in range(0, len(text), max_length)]
+    for chunk in chunks:
         try:
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(chunk, parse_mode="Markdown")
         except Exception:
-            await update.message.reply_text(text)
-    else:
-        for i in range(0, len(text), max_length):
-            chunk = text[i:i + max_length]
-            try:
-                await update.message.reply_text(chunk, parse_mode="Markdown")
-            except Exception:
-                await update.message.reply_text(chunk)
+            await update.message.reply_text(chunk)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
         "مرحباً بك! أنا مساعد العمل الذكي المتعدد المحركات.\n\n"
         "🌐 **المحركات المدمجة:**\n"
-        "• Groq (Llama 3.1 8B Instant / Llama 3.3 70B)\n"
-        "• OpenRouter (Llama 3.3 / Qwen / Gemini Free)\n"
-        "• Google Gemini (2.0 Flash / 1.5 Flash)\n"
+        "• Groq (Llama 3.1 / Llama 3.3)\n"
+        "• Google Gemini (3.8 Flash)\n"
+        "• OpenRouter Free\n"
         "• Mistral AI\n\n"
-        "📌 **للبحث الميداني في النت:** اكتب قبل سؤالك كلمة **بحث** أو **search**."
+        "📌 **للبحث الميداني:** اكتب قبل سؤالك كلمة **بحث** أو **search**."
     )
     await update.message.reply_text(welcome, parse_mode="Markdown")
 
