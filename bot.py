@@ -1,11 +1,13 @@
 import os
 import logging
+import asyncio
 from duckduckgo_search import DDGS
 from groq import Groq
 from google import genai
 from google.genai import types
 from openai import OpenAI
 from telegram import Update
+from telegram.error import Conflict, NetworkError, TelegramError
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # إعداد السجلات (Logging)
@@ -14,22 +16,19 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# 1. إعداد عميل Groq
+# 1. إعداد عملاء الـ API
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-# 2. إعداد عميل OpenRouter
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
 openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_KEY
 ) if OPENROUTER_KEY else None
 
-# 3. إعداد عميل Gemini
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-# 4. إعداد عميل Mistral
 MISTRAL_KEY = os.environ.get("MISTRAL_API_KEY")
 mistral_client = OpenAI(
     base_url="https://api.mistral.ai/v1",
@@ -39,10 +38,10 @@ mistral_client = OpenAI(
 SYSTEM_INSTRUCTION = """
 أنت مساعد مكتبي وباحث ومبرمج احترافي صارم.
 تلتزم بالقواعد التالية بدقة:
-1. الموثوقية التامة: تقديم حقائق ومعلومات مؤكدة فقط بدون تخمين أو استنتاجات ظنية.
-2. غياب المعلومة: إذا لم تتوفر لديك بيانات كافية، صرح فوراً: "لا تتوفر أدلة أو بيانات مؤكدة حول هذا الموضوع".
-3. البرمجة والكودينغ: تقديم أكواد برمجية نظيفة، موثقة، وخالية من الأخطاء مع شرح خطوات التشغيل.
-4. الأعمال الإدارية: صياغة الخطابات والمستندات بأسلوب رسمي واحترافي (عربي / فرنسي).
+1. الموثوقية التامة: تقديم حقائق ومعلومات مؤكدة فقط بدون تخمين.
+2. غياب المعلومة: إذا لم تتوفر بيانات كافية، صرح فوراً: "لا تتوفر أدلة أو بيانات مؤكدة حول هذا الموضوع".
+3. البرمجة والكودينغ: تقديم أكواد برمجية نظيفة مع شرح خطوات التشغيل.
+4. الأعمال الإدارية: صياغة الخطابات والمستندات بأسلوب رسمي (عربي / فرنسي).
 5. البحث والتحقق: الاعتماد على نتائج البحث المباشرة للإجابة بدقة وحياد.
 """
 
@@ -63,12 +62,10 @@ def free_web_search(query: str, max_results: int = 5) -> str:
         logging.error(f"خطأ أثناء البحث: {e}")
         return f"تعذر إجراء البحث المباشر: {str(e)}"
 
-# --- محركات الاستجابة الذكية ---
+# --- محركات الاستجابة ---
 
 def ask_groq(prompt_text: str) -> str:
-    if not GROQ_KEY or not groq_client: 
-        return None
-    # قائمة الموديلات المعتمدة الشغالة حالياً في Groq
+    if not GROQ_KEY or not groq_client: return None
     models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "qwen-2.5-coder-32b"]
     for m in models:
         try:
@@ -81,7 +78,7 @@ def ask_groq(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح Groq باستخدام الموديل: {m}")
+                logging.info(f"نجح Groq باستخدام: {m}")
                 return res.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"فشل Groq ({m}): {e}")
@@ -89,10 +86,8 @@ def ask_groq(prompt_text: str) -> str:
     return None
 
 def ask_gemini(prompt_text: str) -> str:
-    if not GEMINI_KEY or not gemini_client: 
-        return None
-    # الموديلات المعتمدة حسب التحديث الأخير لـ Google API
-    models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    if not GEMINI_KEY or not gemini_client: return None
+    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
     for m in models:
         try:
             res = gemini_client.models.generate_content(
@@ -104,7 +99,7 @@ def ask_gemini(prompt_text: str) -> str:
                 )
             )
             if res and res.text:
-                logging.info(f"نجح Gemini باستخدام الموديل: {m}")
+                logging.info(f"نجح Gemini باستخدام: {m}")
                 return res.text.strip()
         except Exception as e:
             logging.warning(f"فشل Gemini ({m}): {e}")
@@ -112,8 +107,7 @@ def ask_gemini(prompt_text: str) -> str:
     return None
 
 def ask_openrouter(prompt_text: str) -> str:
-    if not OPENROUTER_KEY or not openrouter_client: 
-        return None
+    if not OPENROUTER_KEY or not openrouter_client: return None
     models = [
         "meta-llama/llama-3.3-70b-instruct:free",
         "qwen/qwen-2.5-72b-instruct:free",
@@ -131,7 +125,7 @@ def ask_openrouter(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح OpenRouter باستخدام الموديل: {m}")
+                logging.info(f"نجح OpenRouter باستخدام: {m}")
                 return res.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"فشل OpenRouter ({m}): {e}")
@@ -139,8 +133,7 @@ def ask_openrouter(prompt_text: str) -> str:
     return None
 
 def ask_mistral(prompt_text: str) -> str:
-    if not MISTRAL_KEY or not mistral_client: 
-        return None
+    if not MISTRAL_KEY or not mistral_client: return None
     models = ["mistral-small-latest", "open-mistral-7b"]
     for m in models:
         try:
@@ -153,7 +146,7 @@ def ask_mistral(prompt_text: str) -> str:
                 temperature=0.1
             )
             if res.choices and res.choices[0].message.content:
-                logging.info(f"نجح Mistral باستخدام الموديل: {m}")
+                logging.info(f"نجح Mistral باستخدام: {m}")
                 return res.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"فشل Mistral ({m}): {e}")
@@ -172,8 +165,8 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
 
     engines = [
         ("Groq", ask_groq),
-        ("Google Gemini", ask_gemini),
         ("OpenRouter", ask_openrouter),
+        ("Google Gemini", ask_gemini),
         ("Mistral AI", ask_mistral),
     ]
 
@@ -193,7 +186,6 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
     return "عذراً، لم تنجح الاستجابة من المحركات المتاحة. يرجى التحقق من مفاتيح الـ API في متغيرات البيئة."
 
 async def send_response(update: Update, text: str):
-    """تجزئة الرسائل الطويلة وحماية البوت من أخطاء تنسيق Markdown"""
     max_length = 4000
     if not text:
         text = "لم يتم الحصول على إجابة."
@@ -210,8 +202,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "مرحباً بك! أنا مساعد العمل الذكي المتعدد المحركات.\n\n"
         "🌐 **المحركات المدمجة:**\n"
         "• Groq (Llama 3.1 / Llama 3.3)\n"
-        "• Google Gemini (3.8 Flash)\n"
         "• OpenRouter Free\n"
+        "• Google Gemini\n"
         "• Mistral AI\n\n"
         "📌 **للبحث الميداني:** اكتب قبل سؤالك كلمة **بحث** أو **search**."
     )
@@ -236,12 +228,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response_text = generate_multi_engine_response(clean_query, search_context)
     await send_response(update, response_text)
 
+# --- معالج الأخطاء العالمي لمنع انهيار البوت ---
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Conflict):
+        logging.warning("حدث تعارض مؤقت في الجلسات (409 Conflict)، يتم التجاوز تلقائياً...")
+    elif isinstance(context.error, NetworkError):
+        logging.warning("حدث انقطاع مؤقت في شبكة الاتصال بتلغرام، جاري إعادة المحاولة...")
+    else:
+        logging.error("استثناء غير متوقع:", exc_info=context.error)
+
 if __name__ == '__main__':
     bot_token = os.environ.get("BOT_TOKEN")
     if not bot_token:
         raise ValueError("يرجى ضبط متغير البيئة BOT_TOKEN")
 
     app = ApplicationBuilder().token(bot_token).build()
+    
+    # تسجيل معالج الأخطاء
+    app.add_error_handler(global_error_handler)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
