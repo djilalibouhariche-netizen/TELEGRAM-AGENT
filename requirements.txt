@@ -1,0 +1,7 @@
+python-telegram-bot>=20.0
+groq
+openai
+google-genai
+duckduckgo-search
+httpx
+beautifulsoup4
