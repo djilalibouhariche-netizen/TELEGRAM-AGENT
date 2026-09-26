@@ -47,7 +47,7 @@ SYSTEM_INSTRUCTION = """
 """
 
 def free_web_search(query: str, max_results: int = 5) -> str:
-    """بحث مجاني عبر DuckDuckGo بدون توكنات"""
+    """بحث مجاني عبر DuckDuckGo"""
     try:
         results = []
         with DDGS() as ddgs:
@@ -59,57 +59,84 @@ def free_web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"حدث خطأ أثناء البحث: {str(e)}"
 
-# --- محركات الاستجابة المصححة ---
+# --- محركات الاستجابة مع دعم المحاولات الاحتياطية ---
 
 def ask_groq(prompt_text: str) -> str:
     if not groq_client: return None
-    # استخدام النموذج السريع والمستقر مجاناً من Groq
-    res = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt_text}
-        ],
-        temperature=0.0
-    )
-    return res.choices[0].message.content
-
-def ask_openrouter(prompt_text: str) -> str:
-    if not openrouter_client: return None
-    res = openrouter_client.chat.completions.create(
-        model="openrouter/free",
-        messages=[
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt_text}
-        ],
-        temperature=0.0
-    )
-    return res.choices[0].message.content
+    # تجربة أحدث النماذج المتاحة مجاناً في Groq
+    groq_models = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+    for model_name in groq_models:
+        try:
+            res = groq_client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt_text}
+                ],
+                temperature=0.0
+            )
+            logging.info(f"نجح Groq باستخدام النموذج: {model_name}")
+            return res.choices[0].message.content
+        except Exception as e:
+            logging.warning(f"فشل Groq ({model_name}): {e}")
+            continue
+    return None
 
 def ask_gemini(prompt_text: str) -> str:
     if not gemini_client: return None
-    # استخدام نموذج gemini-1.5-flash المستقر مجاناً
-    res = gemini_client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents=prompt_text,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.0
-        )
-    )
-    return res.text
+    # تجربة نماذج Gemini المدعومة في مكتبة google-genai
+    gemini_models = ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-2.5-flash']
+    for model_name in gemini_models:
+        try:
+            res = gemini_client.models.generate_content(
+                model=model_name,
+                contents=prompt_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.0
+                )
+            )
+            logging.info(f"نجح Gemini باستخدام النموذج: {model_name}")
+            return res.text
+        except Exception as e:
+            logging.warning(f"فشل Gemini ({model_name}): {e}")
+            continue
+    return None
+
+def ask_openrouter(prompt_text: str) -> str:
+    if not openrouter_client: return None
+    models = ["google/gemini-2.0-flash-001:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/auto"]
+    for m in models:
+        try:
+            res = openrouter_client.chat.completions.create(
+                model=m,
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt_text}
+                ],
+                temperature=0.0
+            )
+            return res.choices[0].message.content
+        except Exception as e:
+            logging.warning(f"فشل OpenRouter ({m}): {e}")
+            continue
+    return None
 
 def ask_mistral(prompt_text: str) -> str:
     if not mistral_client: return None
-    res = mistral_client.chat.completions.create(
-        model="mistral-small-latest",
-        messages=[
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt_text}
-        ],
-        temperature=0.0
-    )
-    return res.choices[0].message.content
+    try:
+        res = mistral_client.chat.completions.create(
+            model="mistral-small-latest",
+            messages=[
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt_text}
+            ],
+            temperature=0.0
+        )
+        return res.choices[0].message.content
+    except Exception as e:
+        logging.warning(f"فشل Mistral: {e}")
+        return None
 
 def generate_multi_engine_response(query: str, search_context: str = "") -> str:
     if search_context:
@@ -118,7 +145,7 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
         full_prompt = query
 
     engines = [
-        ("Groq (Llama 3.1)", ask_groq),
+        ("Groq", ask_groq),
         ("Google Gemini", ask_gemini),
         ("OpenRouter Free", ask_openrouter),
         ("Mistral AI", ask_mistral),
@@ -131,17 +158,17 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
                 logging.info(f"تمت الاستجابة بنجاح عبر: {name}")
                 return answer
         except Exception as e:
-            logging.warning(f"فشل المحرك {name}: {e}")
+            logging.warning(f"خطأ غير متوقع في {name}: {e}")
             continue
 
-    return "عذراً، تعذر الحصول على إجابة من المحركات المتاحة. يرجى التأكد من صحة مفاتيح API."
+    return "عذراً، تعذر الحصول على إجابة من المحركات المتاحة. يرجى التأكد من إضافة مفاتيح API الصحيحة في متغيرات البيئة."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
         "مرحباً بك! أنا مساعد العمل الذكي المتعدد المحركات.\n\n"
-        "🌐 **المحركات المدمجة (مجانية بالكامل):**\n"
-        "• Groq (Llama 3.1)\n"
-        "• Google Gemini\n"
+        "🌐 **المحركات المدمجة:**\n"
+        "• Groq (Llama 3.3 / Llama 3)\n"
+        "• Google Gemini (2.0 Flash)\n"
         "• OpenRouter Free\n"
         "• Mistral AI\n\n"
         "📌 **للبحث الميداني في النت:** اكتب قبل سؤالك كلمة **بحث** أو **search**."
