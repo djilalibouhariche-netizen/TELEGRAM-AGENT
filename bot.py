@@ -18,7 +18,7 @@ logging.basicConfig(
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-# 2. OpenRouter Client (يستخدم واجهة OpenAI)
+# 2. OpenRouter Client
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
 openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
@@ -59,12 +59,13 @@ def free_web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"حدث خطأ أثناء البحث: {str(e)}"
 
-# --- محركات الاستجابة مع التناوب التلقائي (Fallback) ---
+# --- محركات الاستجابة المصححة ---
 
 def ask_groq(prompt_text: str) -> str:
     if not groq_client: return None
+    # استخدام النموذج السريع والمستقر مجاناً من Groq
     res = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {"role": "user", "content": prompt_text}
@@ -75,7 +76,6 @@ def ask_groq(prompt_text: str) -> str:
 
 def ask_openrouter(prompt_text: str) -> str:
     if not openrouter_client: return None
-    # استخدام التوجيه المجاني التلقائي من OpenRouter
     res = openrouter_client.chat.completions.create(
         model="openrouter/free",
         messages=[
@@ -88,8 +88,9 @@ def ask_openrouter(prompt_text: str) -> str:
 
 def ask_gemini(prompt_text: str) -> str:
     if not gemini_client: return None
+    # استخدام نموذج gemini-1.5-flash المستقر مجاناً
     res = gemini_client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-1.5-flash',
         contents=prompt_text,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
@@ -111,17 +112,15 @@ def ask_mistral(prompt_text: str) -> str:
     return res.choices[0].message.content
 
 def generate_multi_engine_response(query: str, search_context: str = "") -> str:
-    """تجربة المحركات بالتوالي لضمان استجابة مجانية دائماً"""
     if search_context:
         full_prompt = f"نتائج البحث المباشر:\n{search_context}\n\nطلب المستخدم:\n{query}\n\nأجب بدقة وبناءً على الحقائق المتاحة فقط."
     else:
         full_prompt = query
 
-    # سلسلة المحاولات بالترتيب
     engines = [
-        ("Groq (Llama 3.3)", ask_groq),
-        ("OpenRouter Free", ask_openrouter),
+        ("Groq (Llama 3.1)", ask_groq),
         ("Google Gemini", ask_gemini),
+        ("OpenRouter Free", ask_openrouter),
         ("Mistral AI", ask_mistral),
     ]
 
@@ -135,15 +134,15 @@ def generate_multi_engine_response(query: str, search_context: str = "") -> str:
             logging.warning(f"فشل المحرك {name}: {e}")
             continue
 
-    return "عذراً، جميع المحركات المجانية غير متاحة حالياً. يرجى التحقق من مفاتيح API."
+    return "عذراً، تعذر الحصول على إجابة من المحركات المتاحة. يرجى التأكد من صحة مفاتيح API."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
         "مرحباً بك! أنا مساعد العمل الذكي المتعدد المحركات.\n\n"
         "🌐 **المحركات المدمجة (مجانية بالكامل):**\n"
-        "• Groq (Llama 3.3)\n"
-        "• OpenRouter (Free Router)\n"
+        "• Groq (Llama 3.1)\n"
         "• Google Gemini\n"
+        "• OpenRouter Free\n"
         "• Mistral AI\n\n"
         "📌 **للبحث الميداني في النت:** اكتب قبل سؤالك كلمة **بحث** أو **search**."
     )
